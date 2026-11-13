@@ -1,0 +1,26 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments & Secrets
+venv/
+env/
+.venv/
+ENV/
+.env
+.env.*
+*.log
+
+# Raw dataset (downloaded via script / external)
+data/brain_mri_raw/
+
+# Heavy training optimizer checkpoints (inference weights are in models/)
+checkpoints/
+
+# IDE & OS artifacts
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+Desktop.ini

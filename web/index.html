@@ -1,0 +1,262 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>MedVision-LLM — Sovereign Medical Vision-Language Model</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&family=Space+Grotesk:wght@600;700&display=swap" rel="stylesheet" />
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="stylesheet" href="/static/css/style.css" />
+</head>
+<body class="p-3 md:p-6 selection:bg-cyan-500/20 selection:text-cyan-200">
+  <div class="max-w-[1600px] mx-auto space-y-5">
+
+    <!-- Top Navigation & Diagnostic Telemetry HUD -->
+    <header class="glass-panel rounded-2xl px-6 py-4 flex flex-wrap items-center justify-between gap-4">
+      <div class="flex items-center gap-3.5">
+        <div class="w-11 h-11 rounded-xl bg-cyan-500/15 border border-cyan-400/40 flex items-center justify-center text-2xl shadow-[0_0_24px_rgba(0,243,255,0.25)]">
+          🧠
+        </div>
+        <div>
+          <div class="flex items-center gap-2.5">
+            <h1 class="text-xl md:text-2xl font-bold tracking-tight text-white font-display" style="font-family: 'Space Grotesk', sans-serif;">
+              MedVision-LLM
+            </h1>
+            <span class="text-[10px] font-mono uppercase px-2.5 py-0.5 rounded-full bg-cyan-500/15 text-cyan-300 border border-cyan-400/30">
+              VLM Diagnostic SLM
+            </span>
+          </div>
+          <p class="text-xs text-slate-400">Trained from Scratch • ConvNeXt Visual Stem + Causal Multimodal Transformer</p>
+        </div>
+      </div>
+
+      <div class="flex flex-wrap items-center gap-2.5 text-xs font-mono">
+        <div class="px-3.5 py-1.5 rounded-xl bg-slate-900/90 border border-emerald-500/30 text-emerald-300 flex items-center gap-2">
+          <span class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+          <span>CUDA: RTX 3060 Laptop GPU</span>
+        </div>
+        <div class="px-3.5 py-1.5 rounded-xl bg-slate-900/90 border border-white/10 text-cyan-300">
+          Parameters: 6.4M
+        </div>
+        <div class="px-3.5 py-1.5 rounded-xl bg-slate-900/90 border border-white/10 text-slate-300">
+          Modality: Brain MRI T1/T2
+        </div>
+      </div>
+    </header>
+
+    <!-- Main Workspace Grid -->
+    <div class="grid grid-cols-1 lg:grid-cols-12 gap-5">
+
+      <!-- Left Column: MRI Ingestion & Sample Scans (5 cols) -->
+      <div class="lg:col-span-5 space-y-4">
+        
+        <!-- Scan Viewport Card -->
+        <div class="glass-panel rounded-2xl p-5 space-y-4">
+          <div class="flex items-center justify-between border-b border-white/10 pb-3">
+            <h2 class="text-sm font-bold text-white uppercase tracking-wider font-mono">
+              🔬 Medical Scan Viewport
+            </h2>
+            <span id="scan-status-badge" class="text-[11px] font-mono px-2 py-0.5 rounded bg-slate-800 text-slate-400 border border-white/10">
+              Ready
+            </span>
+          </div>
+
+          <!-- Dropzone / Image Display -->
+          <div
+            id="dropzone"
+            onclick="document.getElementById('file-input').click()"
+            class="scan-dropzone relative w-full aspect-square max-h-[380px] bg-slate-950/70 rounded-xl overflow-hidden cursor-pointer flex flex-col items-center justify-center p-4 text-center group"
+          >
+            <img id="scan-preview" class="hidden w-full h-full object-contain select-none" />
+            <div id="drop-placeholder" class="space-y-2 text-slate-400">
+              <span class="text-4xl block group-hover:scale-110 transition duration-200">🩻</span>
+              <div class="text-xs font-semibold text-white">Click or Drag & Drop Brain MRI Scan</div>
+              <div class="text-[11px] font-mono text-slate-500">Supports JPG, PNG, DICOM-derived slices</div>
+            </div>
+            <input id="file-input" type="file" accept="image/*" class="hidden" onchange="handleFileSelect(event)" />
+          </div>
+
+          <!-- Visual Tokenizer Grid Telemetry -->
+          <div class="p-3 rounded-xl bg-slate-900/60 border border-white/5 space-y-2 text-xs font-mono">
+            <div class="flex items-center justify-between text-slate-400">
+              <span>VISUAL EMBEDDING GRID:</span>
+              <span class="text-cyan-300">16 Spatial Tokens (4x4)</span>
+            </div>
+            <div class="grid grid-cols-8 gap-1">
+              <div class="h-2 rounded bg-cyan-500/30"></div>
+              <div class="h-2 rounded bg-cyan-500/40"></div>
+              <div class="h-2 rounded bg-cyan-500/50"></div>
+              <div class="h-2 rounded bg-cyan-500/60"></div>
+              <div class="h-2 rounded bg-cyan-500/50"></div>
+              <div class="h-2 rounded bg-cyan-500/40"></div>
+              <div class="h-2 rounded bg-cyan-500/30"></div>
+              <div class="h-2 rounded bg-cyan-500/20"></div>
+              <div class="h-2 rounded bg-violet-500/30"></div>
+              <div class="h-2 rounded bg-violet-500/40"></div>
+              <div class="h-2 rounded bg-violet-500/50"></div>
+              <div class="h-2 rounded bg-violet-500/60"></div>
+              <div class="h-2 rounded bg-violet-500/50"></div>
+              <div class="h-2 rounded bg-violet-500/40"></div>
+              <div class="h-2 rounded bg-violet-500/30"></div>
+              <div class="h-2 rounded bg-violet-500/20"></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Verified Benchmark Test Samples -->
+        <div class="glass-panel rounded-2xl p-5 space-y-3">
+          <div class="flex items-center justify-between border-b border-white/10 pb-2.5">
+            <h3 class="text-xs font-bold text-white uppercase tracking-wider font-mono">
+              📂 Verified Clinical Test Samples
+            </h3>
+            <span class="text-[10px] font-mono text-cyan-300">Click to Ingest</span>
+          </div>
+          <div id="samples-container" class="grid grid-cols-2 gap-2 text-xs">
+            <!-- Sample cards loaded dynamically -->
+          </div>
+        </div>
+
+      </div>
+
+      <!-- Right Column: Case Analysis Prompter & LLM Diagnostic Output (7 cols) -->
+      <div class="lg:col-span-7 space-y-4">
+
+        <!-- Diagnostic Prompt Controls Card -->
+        <div class="glass-panel rounded-2xl p-5 space-y-4">
+          <div class="flex items-center justify-between border-b border-white/10 pb-3">
+            <h2 class="text-sm font-bold text-white uppercase tracking-wider font-mono">
+              💬 Clinical Question & Diagnostic Task
+            </h2>
+            <div class="flex items-center gap-2">
+              <span class="text-[11px] font-mono text-slate-400">Temperature:</span>
+              <input id="temp-slider" type="range" min="10" max="80" value="40" oninput="document.getElementById('temp-label').innerText = (this.value/100).toFixed(2)" class="w-20 accent-cyan-400" />
+              <span id="temp-label" class="text-xs font-mono text-cyan-300 font-bold">0.40</span>
+            </div>
+          </div>
+
+          <!-- Prompt Preset Chips -->
+          <div class="space-y-1.5">
+            <label class="text-[11px] font-mono text-slate-400">DIAGNOSTIC PROMPT PRESETS:</label>
+            <div class="flex flex-wrap gap-2 text-xs font-mono">
+              <button onclick="setPrompt('Scan: Brain MRI | Task: Analyze clinical case and diagnose')" class="px-3 py-1.5 rounded-xl bg-slate-900 hover:bg-cyan-500/20 border border-white/10 hover:border-cyan-400/40 text-cyan-200 transition">
+                📋 Full Clinical Case & Diagnosis
+              </button>
+              <button onclick="setPrompt('Scan: Brain MRI | Question: Explain the clinical case and what happened')" class="px-3 py-1.5 rounded-xl bg-slate-900 hover:bg-violet-500/20 border border-white/10 hover:border-violet-400/40 text-violet-200 transition">
+                🩺 What Happened? (Case Narrative)
+              </button>
+              <button onclick="setPrompt('Scan: Brain MRI | Query: What pathology is visible in this scan?')" class="px-3 py-1.5 rounded-xl bg-slate-900 hover:bg-pink-500/20 border border-white/10 hover:border-pink-400/40 text-pink-200 transition">
+                🔍 Pathology & Tumor Finding
+              </button>
+              <button onclick="setPrompt('Scan: Brain MRI | Clinical Request: Provide diagnosis, severity, and recommendations')" class="px-3 py-1.5 rounded-xl bg-slate-900 hover:bg-emerald-500/20 border border-white/10 hover:border-emerald-400/40 text-emerald-200 transition">
+                ⚡ Severity & Actions
+              </button>
+            </div>
+          </div>
+
+          <!-- Custom Prompt Input -->
+          <div class="flex gap-2">
+            <input
+              id="prompt-input"
+              type="text"
+              value="Scan: Brain MRI | Task: Analyze clinical case and diagnose"
+              class="flex-1 bg-slate-950 border border-white/15 rounded-xl px-4 py-2.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-cyan-400 font-mono"
+            />
+            <button
+              id="btn-analyze"
+              onclick="runDiagnosis()"
+              class="px-6 py-2.5 rounded-xl bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-bold text-xs flex items-center gap-2 shadow-[0_0_20px_rgba(0,243,255,0.35)] transition"
+            >
+              <span id="btn-icon">⚡</span>
+              <span id="btn-text">Run Diagnosis</span>
+            </button>
+          </div>
+        </div>
+
+        <!-- LLM Diagnostic Report Output Card -->
+        <div class="glass-panel rounded-2xl p-6 space-y-5">
+          <div class="flex flex-wrap items-center justify-between gap-3 border-b border-white/10 pb-4">
+            <div>
+              <h2 class="text-base font-bold text-white font-display flex items-center gap-2">
+                <span>📑 AI Neurological Clinical Dossier</span>
+              </h2>
+              <p class="text-xs text-slate-400">Generated autoregressively via MedVision-LLM causal decoder</p>
+            </div>
+
+            <!-- Export Buttons -->
+            <div class="flex items-center gap-2 text-xs font-mono">
+              <button onclick="exportDossier('txt')" class="px-3 py-1.5 rounded-xl bg-slate-900 hover:bg-cyan-500/20 border border-white/10 text-cyan-300 transition">
+                ⬇ .TXT Report
+              </button>
+              <button onclick="exportDossier('json')" class="px-3 py-1.5 rounded-xl bg-slate-900 hover:bg-violet-500/20 border border-white/10 text-violet-300 transition">
+                ⬇ .JSON
+              </button>
+            </div>
+          </div>
+
+          <!-- Diagnostic Metrics Badges -->
+          <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            <div class="p-3.5 rounded-xl bg-slate-900/80 border border-white/5 space-y-1">
+              <div class="text-[10px] font-mono uppercase text-slate-400">Primary Diagnosis</div>
+              <div id="res-diagnosis" class="text-sm font-bold text-cyan-300 truncate">
+                Awaiting Scan...
+              </div>
+            </div>
+            <div class="p-3.5 rounded-xl bg-slate-900/80 border border-white/5 space-y-1">
+              <div class="text-[10px] font-mono uppercase text-slate-400">Severity Assessment</div>
+              <div id="res-severity" class="text-sm font-bold text-emerald-300 truncate">
+                --
+              </div>
+            </div>
+            <div class="p-3.5 rounded-xl bg-slate-900/80 border border-white/5 space-y-1">
+              <div class="text-[10px] font-mono uppercase text-slate-400">Scan Modality</div>
+              <div id="res-modality" class="text-sm font-bold text-slate-200 truncate">
+                Brain MRI
+              </div>
+            </div>
+          </div>
+
+          <!-- Clinical Case Narrative ("What Happened") -->
+          <div class="space-y-2">
+            <h3 class="text-xs font-bold text-white uppercase tracking-wider font-mono flex items-center gap-2">
+              <span class="w-1.5 h-1.5 rounded-full bg-cyan-400"></span>
+              <span>Case Narrative ("What Happened"):</span>
+            </h3>
+            <div id="res-case" class="p-4 rounded-xl bg-slate-950/70 border border-white/5 text-xs text-slate-300 leading-relaxed min-h-[72px]">
+              Upload an MRI scan or click a sample on the left, then click "Run Diagnosis" to generate an authentic clinical case evaluation.
+            </div>
+          </div>
+
+          <!-- Pathological Visual Findings -->
+          <div class="space-y-2">
+            <h3 class="text-xs font-bold text-white uppercase tracking-wider font-mono flex items-center gap-2">
+              <span class="w-1.5 h-1.5 rounded-full bg-violet-400"></span>
+              <span>Visual Pathology Findings:</span>
+            </h3>
+            <div id="res-finding" class="p-3.5 rounded-xl bg-slate-950/70 border border-white/5 text-xs text-slate-300 leading-relaxed font-mono">
+              --
+            </div>
+          </div>
+
+          <!-- Actionable Clinical Recommendations -->
+          <div class="space-y-2">
+            <h3 class="text-xs font-bold text-white uppercase tracking-wider font-mono flex items-center gap-2">
+              <span class="w-1.5 h-1.5 rounded-full bg-emerald-400"></span>
+              <span>Actionable Recommendations:</span>
+            </h3>
+            <div id="res-rec" class="p-3.5 rounded-xl bg-slate-950/70 border border-white/5 text-xs text-emerald-200/90 leading-relaxed font-mono">
+              --
+            </div>
+          </div>
+
+        </div>
+
+      </div>
+    </div>
+
+  </div>
+
+  <script src="/static/js/app.js"></script>
+</body>
+</html>
