@@ -14,6 +14,7 @@ ENV/
 
 # Raw dataset (downloaded via script / external)
 data/brain_mri_raw/
+data/neuroscan_raw/
 
 # Heavy training optimizer checkpoints (inference weights are in models/)
 checkpoints/

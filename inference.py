@@ -32,10 +32,12 @@ class MedVisionPipeline:
             num_vis_tokens=16,
         ).to(self.device)
 
-        # Fallback to checkpoints directory if models path not found
+        # Use best available checkpoint (checkpoints/medvision_best.pt or models/medvision_model.pt)
         actual_ckpt = checkpoint_path
-        if not os.path.exists(actual_ckpt) and os.path.exists("checkpoints/medvision_best.pt"):
+        if os.path.exists("checkpoints/medvision_best.pt"):
             actual_ckpt = "checkpoints/medvision_best.pt"
+        elif not os.path.exists(actual_ckpt):
+            actual_ckpt = "models/medvision_model.pt"
 
         if os.path.exists(actual_ckpt):
             ckpt = torch.load(actual_ckpt, map_location=self.device)

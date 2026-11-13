@@ -20,7 +20,7 @@ def evaluate(model: nn.Module, val_loader, device: str, tok: MedicalTokenizer) -
             targets = batch["targets"].to(device, non_blocking=True)
             loss_mask = batch["loss_mask"].to(device, non_blocking=True)
 
-            with torch.cuda.amp.autocast():
+            with torch.amp.autocast("cuda"):
                 _, loss = model(images, input_ids, targets=targets, loss_mask=loss_mask)
 
             mask_sum = loss_mask.sum().item()
@@ -37,8 +37,9 @@ def run_sample_generation(model: nn.Module, test_ds, device: str, tok: MedicalTo
     print("  🩺 REAL-TIME CLINICAL GENERATION ON TEST SCAN")
     print("-" * 60)
 
-    # Pick 2 samples from test dataset
-    for idx in [0, min(50, len(test_ds) - 1)]:
+    # Test 3 different samples
+    indices = [0, len(test_ds) // 2, len(test_ds) - 1]
+    for idx in indices:
         sample = test_ds[idx]
         img = sample["images"].unsqueeze(0).to(device)
         cat = sample["category"]
@@ -52,13 +53,12 @@ def run_sample_generation(model: nn.Module, test_ds, device: str, tok: MedicalTo
             gen_ids = model.generate(
                 img,
                 prompt_tensor,
-                max_new_tokens=100,
-                temperature=0.4,
+                max_new_tokens=140,
+                temperature=0.3,
                 eos_token_id=tok.eos_token_id,
             )
 
         gen_tokens = gen_ids[0].tolist()
-        # Decode only generated response after SEP token
         if tok.sep_token_id in gen_tokens:
             sep_idx = gen_tokens.index(tok.sep_token_id)
             resp_tokens = gen_tokens[sep_idx + 1 :]
@@ -74,18 +74,17 @@ def run_sample_generation(model: nn.Module, test_ds, device: str, tok: MedicalTo
 def train():
     device = "cuda" if torch.cuda.is_available() else "cpu"
     print(f"\n=======================================================")
-    print(f"  🧠 TRAINING MEDVISION-LLM FROM SCRATCH ON {device.upper()}")
+    print(f"  🧠 TRAINING MEDVISION-LLM ON 10,287 SCANS + AUGMENTATION")
     if device == "cuda":
         print(f"  ⚡ GPU: {torch.cuda.get_device_name(0)}")
         print(f"  💾 VRAM: {torch.cuda.get_device_properties(0).total_memory / (1024**3):.1f} GB")
     print(f"=======================================================\n")
 
     batch_size = 32
-    epochs = 6
-    lr = 4e-4
+    epochs = 5
+    lr = 3e-4
 
     train_loader, val_loader, tok = get_dataloaders(
-        root_dir="data/brain_mri_raw",
         batch_size=batch_size,
         img_size=128,
         max_seq_len=160,
@@ -101,26 +100,25 @@ def train():
         num_vis_tokens=16,
     ).to(device)
 
-    print(f"Model Architecture Initialized: {model.get_parameter_count():,} Parameters")
-
-    optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-2, betas=(0.9, 0.95))
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs, eta_min=2e-5)
-    scaler = torch.cuda.amp.GradScaler()
-
-    start_epoch = 1
     ckpt_path = "checkpoints/medvision_best.pt"
     if os.path.exists(ckpt_path):
-        print(f"Resuming from {ckpt_path}...")
+        print(f"Transferring weights from previous checkpoint {ckpt_path}...")
         ckpt = torch.load(ckpt_path, map_location=device)
         model.load_state_dict(ckpt["model_state_dict"])
         best_val_loss = ckpt.get("val_loss", float("inf"))
-        start_epoch = ckpt.get("epoch", 0) + 1
-        epochs = start_epoch + 6
-        lr = 2e-4
+    else:
+        best_val_loss = float("inf")
+
+    print(f"Model Architecture: {model.get_parameter_count():,} Parameters")
+    print(f"Training on: {len(train_loader.dataset):,} Scans | Validation: {len(val_loader.dataset):,} Scans")
+
+    optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-2, betas=(0.9, 0.95))
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs, eta_min=1.5e-5)
+    scaler = torch.amp.GradScaler("cuda")
 
     total_start = time.time()
 
-    for epoch in range(start_epoch, epochs + 1):
+    for epoch in range(1, epochs + 1):
         model.train()
         epoch_start = time.time()
         train_loss = 0.0
@@ -134,7 +132,7 @@ def train():
 
             optimizer.zero_grad(set_to_none=True)
 
-            with torch.cuda.amp.autocast():
+            with torch.amp.autocast("cuda"):
                 _, loss = model(images, input_ids, targets=targets, loss_mask=loss_mask)
 
             scaler.scale(loss).backward()
@@ -147,7 +145,7 @@ def train():
             train_loss += loss.item() * mask_sum
             train_tokens += mask_sum
 
-            if (step + 1) % 25 == 0 or (step + 1) == len(train_loader):
+            if (step + 1) % 50 == 0 or (step + 1) == len(train_loader):
                 curr_loss = train_loss / max(1, train_tokens)
                 print(
                     f"Epoch [{epoch:02d}/{epochs:02d}] Step [{step+1:03d}/{len(train_loader):03d}] "
@@ -169,10 +167,8 @@ def train():
             f"Val Perplexity: {val_ppl:.2f}"
         )
 
-        # Save best model
         if val_loss < best_val_loss:
             best_val_loss = val_loss
-            ckpt_path = "checkpoints/medvision_best.pt"
             torch.save(
                 {
                     "epoch": epoch,
@@ -182,12 +178,12 @@ def train():
                     "vocab_size": tok.vocab_size,
                     "d_model": 256,
                     "params": model.get_parameter_count(),
+                    "total_scans": len(train_loader.dataset) + len(val_loader.dataset),
                 },
                 ckpt_path,
             )
             print(f"⭐ Saved new best checkpoint -> {ckpt_path} (Val Loss: {val_loss:.4f})")
 
-        # Sample test generation
         run_sample_generation(model, val_loader.dataset, device, tok)
 
     total_time = time.time() - total_start
