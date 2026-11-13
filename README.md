@@ -1,134 +1,121 @@
-# 🧠 MedVision-LLM
+# 🧠 MedVision-LLM: Sovereign Medical Vision-Language Model
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-00f3ff.svg)](LICENSE)
 [![PyTorch](https://img.shields.io/badge/PyTorch-2.6%2B_CUDA_12.4-EE4C2C.svg?logo=pytorch&logoColor=white)](https://pytorch.org/)
 [![Hardware](https://img.shields.io/badge/Trained_on-RTX_3060_GPU_(FP16_AMP)-76b900.svg?logo=nvidia&logoColor=white)](#)
 [![Parameters](https://img.shields.io/badge/Parameters-6.4M_Multimodal_VLM-8b5cf6.svg)](#)
-[![Privacy](https://img.shields.io/badge/Privacy-100%25_Local_(Zero_Cloud_APIs)-10b981.svg)](#)
+[![Weights](https://img.shields.io/badge/Model_Weights-24.5_MB_(Zero_Dataset_Download)-10b981.svg)](#)
 
-**MedVision-LLM** is a lightweight, sovereign **Medical Vision-Language Model (Med-VLM)** engineered and trained completely **from scratch** to analyze Brain MRI neuroimaging scans and generate comprehensive clinical diagnostic case reports (*"what happened, pathology diagnosis, severity level, and neurosurgical recommendations"*).
+**MedVision-LLM** is a lightweight, sovereign **Medical Vision-Language Model (Med-VLM)** engineered and trained completely **from scratch** on 10,287 Brain MRI neuroimaging scans. It analyzes MRI scans in real-time, predicts pathology probabilities, and generates structured neurological reports (*"what happened, primary diagnosis, severity level, and neurosurgical recommendations"*).
 
-Unlike cloud-dependent vision APIs, MedVision-LLM runs **100% locally on consumer hardware** (NVIDIA RTX 3060 / multi-core CPU) with zero patient data transmission or subscription dependencies.
+> 🌐 **Try It in the Browser (No Heavy Downloads Needed)**:
+> You do **not** need to download gigabytes of raw medical datasets to test this model. The repository comes bundled with compact inference weights (**24.5 MB**) and an interactive Cyberpunk Web Dashboard with preloaded benchmark test scans.
+
+---
+
+## 🚀 Quick Web Test (Instant in Browser)
+
+### 1. Clone & Install Minimal Requirements
+```bash
+git clone https://github.com/subashis-dev/medvision-llm.git
+cd medvision-llm
+pip install -r requirements.txt
+```
+
+### 2. Launch Interactive Dashboard
+```bash
+python server.py
+```
+Open **[http://localhost:8086](http://localhost:8086)** in your browser:
+* 🔴 **Glioma Tumor** → Click to test intra-axial brain parenchymal tumor
+* 🟠 **Meningioma** → Click to test extra-axial dural-based tumor
+* 🔵 **Pituitary Macroadenoma** → Click to test sellar / suprasellar lesion
+* 🟢 **Normal Brain MRI** → Click to test healthy brain control
+* Or drag & drop your own MRI scan to view the **Live 4-Class Probability Matrix** and generated clinical dossier.
 
 ---
 
 ## 🧬 Multimodal Architecture
 
-MedVision-LLM merges an inverted-bottleneck **ConvNeXt Visual Feature Extractor** with a unified **Causal Multimodal Transformer Decoder (SLM)**:
+MedVision-LLM combines an inverted-bottleneck **ConvNeXt Visual Feature Extractor** with an **Auxiliary Visual Classifier Head** and a unified **Causal Multimodal Transformer Decoder (SLM)**:
 
 ```text
-       Medical Scan (Brain MRI T1/T2 Axial/Sagittal Slice)
+       Medical Scan (Brain MRI Axial / Sagittal Slice)
                              │
                              ▼
  ┌────────────────────────────────────────────────────────┐
  │ 1. ConvNeXt Visual Feature Backbone                    │
- │    • 7x7 Depthwise Conv + GroupNorm / LayerNorm        │
+ │    • 7x7 Depthwise Conv + GroupNorm                    │
  │    • Inverted Bottleneck (4x Expansion with GELU)      │
  │    • 2-Stage Downsampling -> 4x4 Spatial Pooling       │
  └────────────────────────────────────────────────────────┘
-                             │
-                             ▼
- ┌────────────────────────────────────────────────────────┐
- │ 2. Multimodal Linear Projection Bridge                 │
- │    • Projects 256 vision channels into Transformer dim │
- │    • Adds learned spatial positional embeddings        │
- └────────────────────────────────────────────────────────┘
-                             │
-                             ▼ (16 Visual Patch Tokens)
- [ <vis_0> ... <vis_15>, <bos>, "Scan: Brain MRI | Task: Analyze clinical case", <sep> ]
-                             │
-                             ▼
- ┌────────────────────────────────────────────────────────┐
- │ 3. Unified Causal Multimodal Transformer (SLM)         │
- │    • 6 Transformer Layers (256-dim, 8 Attention Heads) │
- │    • Pre-RMSNorm Normalization                         │
- │    • Scaled Dot-Product Causal Self-Attention          │
- │    • 1024-dim SwiGLU / GELU Feed-Forward Network       │
- │    • Weight-Tied Output Projection LM Head             │
- └────────────────────────────────────────────────────────┘
-                             │
-                             ▼ (Autoregressive Generation)
+            │                               │
+            ▼ (Pooled Feats)                ▼ (16 Visual Tokens)
+ ┌───────────────────────┐   [ <vis_0> ... <vis_15>, Prompt Tokens... ]
+ │ Auxiliary Classifier  │                  │
+ │ • Direct Cross-Entropy│                  ▼
+ │ • 4 Pathology Classes │   ┌────────────────────────────────────────┐
+ └───────────────────────┘   │ 2. Multimodal Transformer Decoder (SLM)│
+            │                │    • 6 Layers, 8 Attention Heads       │
+            │                │    • Pre-RMSNorm Normalization         │
+            │                │    • Scaled Dot-Product Attention      │
+            │                │    • Tied Linear LM Projection Head    │
+            │                └────────────────────────────────────────┘
+            │                               │
+            └───────────────┬───────────────┘
+                            ▼ (Autoregressive Clinical Report)
  {
+   "diagnosis": "Pituitary Adenoma",
+   "severity": "Moderate",
+   "finding": "expanded sella turcica with homogeneous suprasellar mass extending toward chiasm",
    "modality": "Brain MRI",
-   "finding": "Infiltrative heterogeneous intra-axial mass with surrounding vasogenic edema",
-   "diagnosis": "Glioma",
-   "severity": "High",
-   "clinical_case": "Patient presented with focal neurological deficit and new-onset seizures. MRI reveals cerebral parenchymal neoplasm with local mass effect.",
-   "recommendations": "Urgent neurosurgical consult for stereotactic biopsy, surgical resection, and oncology staging."
+   "clinical_case": "Patient presented with bitemporal hemianopsia and endocrine screening irregularities.",
+   "recommendations": "Endocrine hormone panel and neurosurgical consultation for transsphenoidal resection."
  }
 ```
 
 ---
 
-## 📊 Model Specifications
+## 📊 Training & Dataset Benchmark
 
-| Parameter | Specification | Purpose |
-| :--- | :--- | :--- |
-| **Model Type** | Hybrid ConvNeXt + Causal Transformer VLM | Unified vision-language autoregressive modeling |
-| **Total Parameters** | **6,396,544 (~6.4M)** | Verified via PyTorch parameter profiler |
-| **Visual Backbone** | Inverted Bottleneck ConvNeXt Stem | Spatial lesion and anatomical feature extraction |
-| **Visual Tokens** | 16 Spatial Tokens (`4x4` grid) | Compressed dense visual representation |
-| **Transformer Depth** | 6 Layers (8 Heads, 32-dim/head) | Autoregressive clinical reasoning & generation |
-| **Embedding Dimension ($d_{model}$)** | 256 | Dense vector embedding width |
-| **FFN Dimension** | 1,024 ($4 \times d_{model}$) | High-capacity non-linear medical knowledge mapping |
-| **Vocabulary Size** | 256 (Aligned to 64) | Medical clinical lexicon + JSON syntax characters |
-| **Model Footprint** | **~25 MB** (Inference weights) | 100% self-contained; zero external weight downloads |
+* **Total Scans:** 10,287 real Brain MRI scans (8,582 train / 1,705 validation)
+* **Dataset Sources:** Multi-source merged benchmarks (`sartajbhuvaji/Brain-Tumor-Classification-DataSet` + `Brandon-Kee/NeuroScan`)
+* **Augmentation:** Dynamic medical online augmentation (rotation $\pm 14^\circ$, scaling, gamma shift $\gamma \in [0.85, 1.20]$, blur)
+* **Model Parameters:** 6,429,956 (6.4M)
+* **Inference Speed:** ~15ms vision encoding, ~120ms total generation on RTX 3060 Laptop GPU (also runs smoothly on CPU).
 
 ---
 
-## 📈 Training Dynamics & Benchmark Convergence
+## 📁 Repository Structure
 
-Trained on real Brain MRI scans across 4 verified clinical pathology classes (**Glioma**, **Meningioma**, **Pituitary Adenoma**, and **Normal Brain Scans**):
-
-* **Compute Hardware:** NVIDIA GeForce RTX 3060 Laptop GPU (6.0 GB VRAM)
-* **Precision:** FP16 Automatic Mixed Precision (`torch.amp.autocast`)
-* **Optimization:** AdamW ($\text{LR}=4 \times 10^{-4} \to 2 \times 10^{-5}$) with Cosine Annealing schedule
-* **Convergence Time:** **~2.8 minutes** total for complete convergence
-* **Validation Loss:** **0.0304** (Validation Perplexity: **1.03**)
-
----
-
-## 🚀 Quick Start (Local Setup)
-
-### 1. Clone & Enter Directory
-```bash
-git clone https://github.com/subashis-dev/medvision-llm.git
-cd medvision-llm
-```
-
-### 2. Install Dependencies
-```bash
-pip install -r requirements.txt
-```
-
-*(For GPU acceleration on NVIDIA hardware, install PyTorch with CUDA 12.4 support: `pip install torch --index-url https://download.pytorch.org/whl/cu124`)*
-
-### 3. Launch Web Diagnostic Dashboard
-```bash
-python server.py
-```
-
-Open your browser at:
 ```text
-http://localhost:8086
+medvision-llm/
+├── data/
+│   ├── samples/             # Curated, verified test scans for 1-click evaluation
+│   └── vocab.json           # Specialized medical vocabulary with whitespace preservation
+├── models/
+│   └── medvision_model.pt   # Compact trained weights (24.5 MB)
+├── web/
+│   ├── css/                 # Glassmorphic cyberpunk styling
+│   ├── js/app.js            # Live dashboard logic & probability matrix renderer
+│   └── index.html           # Diagnostic UI
+├── model.py                 # PyTorch MedVisionVLM architecture
+├── tokenizer.py             # Specialized clinical tokenizer
+├── inference.py             # Preprocessing, brain skull auto-cropping & inference
+├── server.py                # FastAPI backend & REST endpoints (port 8086)
+├── test_eval.py             # Fast terminal verification script
+└── requirements.txt         # Lightweight dependencies
 ```
 
 ---
 
-## 🔬 Interactive Clinical Capabilities
+## 🔒 Privacy & Safety Notice
 
-* **Drop & Drag Brain MRI Scans:** Upload any axial, sagittal, or coronal MRI slice directly in the web UI.
-* **1-Click Benchmark Test Scans:** Click any of the preloaded clinical samples (Glioma, Meningioma, Pituitary, Normal) for instant evaluation.
-* **Custom Clinical Prompts:** Ask specific questions such as:
-  * *"Scan: Brain MRI | Task: Analyze clinical case and diagnose"*
-  * *"Scan: Brain MRI | Question: Explain the clinical case and what happened"*
-  * *"Scan: Brain MRI | Query: What pathology is visible in this scan?"*
-* **1-Click Dossier Exporter:** Download formatted `.txt` and `.json` neurological case reports for clinical review.
+* **100% On-Device Execution:** All inference runs locally in system memory / GPU VRAM. Zero telemetry, zero external API calls.
+* **Scope:** MedVision-LLM is trained specifically on brain neoplasms (*Glioma*, *Meningioma*, *Pituitary Adenoma*, and *Normal Controls*). Non-tumorous vascular conditions (e.g. acute ischemic stroke / infarction) lack neoplastic features and are classified as negative for intracranial tumor. Designed for research and educational purposes.
 
 ---
 
-## 📜 Clinical Disclaimer & License
+## 📄 License
 
-**Disclaimer:** MedVision-LLM is built for sovereign edge artificial intelligence research, educational exploration, and algorithmic benchmarking. It should not be used as a standalone substitute for professional medical diagnosis or board-certified radiologist evaluation.
-
-Licensed under the [MIT License](LICENSE) — Copyright (c) 2026 Subashis Roy Bhowmik.
+MIT License. Open-source for research and clinical AI experimentation.
