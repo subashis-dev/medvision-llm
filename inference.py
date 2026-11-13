@@ -64,6 +64,17 @@ class MedVisionPipeline:
         else:
             img_rgb = img_input
 
+        # Automatic brain skull ROI extraction (removes white web borders and margins)
+        if img_rgb.ndim == 3 and img_rgb.shape[0] > 64 and img_rgb.shape[1] > 64:
+            gray = cv2.cvtColor(img_rgb, cv2.COLOR_RGB2GRAY)
+            valid_mask = (gray < 235) & (gray > 10)
+            coords = np.argwhere(valid_mask)
+            if len(coords) > 500:
+                y0, x0 = coords.min(axis=0)
+                y1, x1 = coords.max(axis=0)
+                if (y1 - y0) >= 40 and (x1 - x0) >= 40:
+                    img_rgb = img_rgb[y0:y1 + 1, x0:x1 + 1]
+
         # Resize to model input size
         resized = cv2.resize(img_rgb, (img_size, img_size), interpolation=cv2.INTER_AREA)
 

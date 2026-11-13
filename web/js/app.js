@@ -167,6 +167,16 @@ function renderDiagnosis(data) {
   document.getElementById("res-finding").innerText = data.finding || "--";
   document.getElementById("res-rec").innerText = data.recommendations || "--";
 
+  if (data.class_probabilities) {
+    document.getElementById("prob-glioma").innerText = data.class_probabilities["Glioma"] || "--";
+    document.getElementById("prob-meningioma").innerText = data.class_probabilities["Meningioma"] || "--";
+    document.getElementById("prob-pituitary").innerText = data.class_probabilities["Pituitary Adenoma"] || "--";
+    document.getElementById("prob-notumor").innerText = data.class_probabilities["Normal Brain MRI"] || "--";
+  }
+  if (data.visual_confidence) {
+    document.getElementById("res-confidence").innerText = "Visual Confidence: " + data.visual_confidence;
+  }
+
   // Dynamic severity color
   const sevEl = document.getElementById("res-severity");
   const s = (data.severity || "").toLowerCase();

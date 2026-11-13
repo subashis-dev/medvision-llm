@@ -217,6 +217,20 @@
             </div>
           </div>
 
+          <!-- Visual Classifier Probability Breakdown -->
+          <div class="p-3.5 rounded-xl bg-slate-900/60 border border-white/5 space-y-2">
+            <div class="flex items-center justify-between text-[11px] font-mono text-slate-400">
+              <span>PATHOLOGY CLASS PROBABILITY MATRIX:</span>
+              <span id="res-confidence" class="text-cyan-300 font-bold">Confidence: --</span>
+            </div>
+            <div class="grid grid-cols-2 sm:grid-cols-4 gap-2 text-[11px] font-mono">
+              <div class="p-2 rounded bg-slate-950/70 border border-white/5">Glioma: <span id="prob-glioma" class="text-cyan-300 font-bold">--</span></div>
+              <div class="p-2 rounded bg-slate-950/70 border border-white/5">Meningioma: <span id="prob-meningioma" class="text-violet-300 font-bold">--</span></div>
+              <div class="p-2 rounded bg-slate-950/70 border border-white/5">Pituitary: <span id="prob-pituitary" class="text-pink-300 font-bold">--</span></div>
+              <div class="p-2 rounded bg-slate-950/70 border border-white/5">No Tumor: <span id="prob-notumor" class="text-emerald-300 font-bold">--</span></div>
+            </div>
+          </div>
+
           <!-- Clinical Case Narrative ("What Happened") -->
           <div class="space-y-2">
             <h3 class="text-xs font-bold text-white uppercase tracking-wider font-mono flex items-center gap-2">
