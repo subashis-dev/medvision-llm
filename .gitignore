@@ -12,7 +12,9 @@ ENV/
 .env.*
 *.log
 
-# Raw dataset (downloaded via script / external)
+# Proprietary Training Pipelines & Institutional Datasets (Protected IP)
+train.py
+dataset.py
 data/brain_mri_raw/
 data/neuroscan_raw/
 
