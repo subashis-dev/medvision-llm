@@ -1,6 +1,8 @@
+import gc
 import math
 import os
 import time
+from typing import Tuple
 import torch
 import torch.nn as nn
 from dataset import get_dataloaders
@@ -8,10 +10,12 @@ from model import MedVisionVLM
 from tokenizer import MedicalTokenizer
 
 
-def evaluate(model: nn.Module, val_loader, device: str, tok: MedicalTokenizer) -> float:
+def evaluate(model: nn.Module, val_loader, device: str, tok: MedicalTokenizer) -> Tuple[float, float]:
     model.eval()
     total_loss = 0.0
     total_tokens = 0
+    correct_cls = 0
+    total_cls = 0
 
     with torch.no_grad():
         for batch in val_loader:
@@ -19,16 +23,22 @@ def evaluate(model: nn.Module, val_loader, device: str, tok: MedicalTokenizer) -
             input_ids = batch["input_ids"].to(device, non_blocking=True)
             targets = batch["targets"].to(device, non_blocking=True)
             loss_mask = batch["loss_mask"].to(device, non_blocking=True)
+            labels = batch["labels"].to(device, non_blocking=True)
 
             with torch.amp.autocast("cuda"):
-                _, loss = model(images, input_ids, targets=targets, loss_mask=loss_mask)
+                _, cls_logits, loss = model(images, input_ids, targets=targets, loss_mask=loss_mask, labels=labels)
 
             mask_sum = loss_mask.sum().item()
             total_loss += loss.item() * mask_sum
             total_tokens += mask_sum
 
+            preds = cls_logits.argmax(dim=-1)
+            correct_cls += (preds == labels).sum().item()
+            total_cls += labels.size(0)
+
     avg_loss = total_loss / max(1, total_tokens)
-    return avg_loss
+    acc = (correct_cls / max(1, total_cls)) * 100.0
+    return avg_loss, acc
 
 
 def run_sample_generation(model: nn.Module, test_ds, device: str, tok: MedicalTokenizer):
@@ -37,7 +47,7 @@ def run_sample_generation(model: nn.Module, test_ds, device: str, tok: MedicalTo
     print("  🩺 REAL-TIME CLINICAL GENERATION ON TEST SCAN")
     print("-" * 60)
 
-    # Test 3 different samples
+    classes = ["glioma", "meningioma", "pituitary adenoma", "normal brain mri"]
     indices = [0, len(test_ds) // 2, len(test_ds) - 1]
     for idx in indices:
         sample = test_ds[idx]
@@ -50,13 +60,16 @@ def run_sample_generation(model: nn.Module, test_ds, device: str, tok: MedicalTo
         prompt_tensor = torch.tensor([prompt_ids], dtype=torch.long, device=device)
 
         with torch.no_grad():
-            gen_ids = model.generate(
+            gen_ids, cls_logits = model.generate(
                 img,
                 prompt_tensor,
                 max_new_tokens=140,
                 temperature=0.3,
                 eos_token_id=tok.eos_token_id,
             )
+
+        pred_cls_idx = cls_logits.argmax(dim=-1)[0].item()
+        pred_cls_name = classes[pred_cls_idx]
 
         gen_tokens = gen_ids[0].tolist()
         if tok.sep_token_id in gen_tokens:
@@ -66,23 +79,24 @@ def run_sample_generation(model: nn.Module, test_ds, device: str, tok: MedicalTo
             resp_tokens = gen_tokens
 
         resp_text = tok.decode(resp_tokens, skip_special=True)
-        print(f"Ground Truth Pathology: [{cat.upper()}]")
-        print(f"Generated Diagnosis   : {resp_text}\n")
+        print(f"Ground Truth Pathology : [{cat.upper()}]")
+        print(f"Visual Classifier Head : {pred_cls_name.upper()}")
+        print(f"Generated Diagnosis    : {resp_text}\n")
     print("-" * 60)
 
 
 def train():
     device = "cuda" if torch.cuda.is_available() else "cpu"
     print(f"\n=======================================================")
-    print(f"  🧠 TRAINING MEDVISION-LLM ON 10,287 SCANS + AUGMENTATION")
+    print(f"  🧠 MEDVISION-LLM MULTITASK CALIBRATION (CLASSIFIER + VLM)")
     if device == "cuda":
         print(f"  ⚡ GPU: {torch.cuda.get_device_name(0)}")
         print(f"  💾 VRAM: {torch.cuda.get_device_properties(0).total_memory / (1024**3):.1f} GB")
     print(f"=======================================================\n")
 
-    batch_size = 32
-    epochs = 5
-    lr = 3e-4
+    batch_size = 16
+    epochs = 3
+    lr = 3.0e-4
 
     train_loader, val_loader, tok = get_dataloaders(
         batch_size=batch_size,
@@ -102,18 +116,18 @@ def train():
 
     ckpt_path = "checkpoints/medvision_best.pt"
     if os.path.exists(ckpt_path):
-        print(f"Transferring weights from previous checkpoint {ckpt_path}...")
+        print(f"Transferring backbone weights from previous checkpoint {ckpt_path}...")
         ckpt = torch.load(ckpt_path, map_location=device)
-        model.load_state_dict(ckpt["model_state_dict"])
-        best_val_loss = ckpt.get("val_loss", float("inf"))
-    else:
-        best_val_loss = float("inf")
+        model.load_state_dict(ckpt["model_state_dict"], strict=False)
+
+    best_val_loss = float("inf")
+    best_val_acc = 0.0
 
     print(f"Model Architecture: {model.get_parameter_count():,} Parameters")
     print(f"Training on: {len(train_loader.dataset):,} Scans | Validation: {len(val_loader.dataset):,} Scans")
 
     optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-2, betas=(0.9, 0.95))
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs, eta_min=1.5e-5)
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs, eta_min=2e-5)
     scaler = torch.amp.GradScaler("cuda")
 
     total_start = time.time()
@@ -123,17 +137,20 @@ def train():
         epoch_start = time.time()
         train_loss = 0.0
         train_tokens = 0
+        train_correct = 0
+        train_total = 0
 
         for step, batch in enumerate(train_loader):
             images = batch["images"].to(device, non_blocking=True)
             input_ids = batch["input_ids"].to(device, non_blocking=True)
             targets = batch["targets"].to(device, non_blocking=True)
             loss_mask = batch["loss_mask"].to(device, non_blocking=True)
+            labels = batch["labels"].to(device, non_blocking=True)
 
             optimizer.zero_grad(set_to_none=True)
 
             with torch.amp.autocast("cuda"):
-                _, loss = model(images, input_ids, targets=targets, loss_mask=loss_mask)
+                _, cls_logits, loss = model(images, input_ids, targets=targets, loss_mask=loss_mask, labels=labels)
 
             scaler.scale(loss).backward()
             scaler.unscale_(optimizer)
@@ -145,29 +162,40 @@ def train():
             train_loss += loss.item() * mask_sum
             train_tokens += mask_sum
 
+            preds = cls_logits.argmax(dim=-1)
+            train_correct += (preds == labels).sum().item()
+            train_total += labels.size(0)
+
             if (step + 1) % 50 == 0 or (step + 1) == len(train_loader):
                 curr_loss = train_loss / max(1, train_tokens)
+                curr_acc = (train_correct / max(1, train_total)) * 100.0
                 print(
                     f"Epoch [{epoch:02d}/{epochs:02d}] Step [{step+1:03d}/{len(train_loader):03d}] "
-                    f"Train Loss: {curr_loss:.4f} | LR: {scheduler.get_last_lr()[0]:.2e}"
+                    f"Loss: {curr_loss:.4f} | Visual Acc: {curr_acc:.1f}% | LR: {scheduler.get_last_lr()[0]:.2e}"
                 )
 
         scheduler.step()
         epoch_train_loss = train_loss / max(1, train_tokens)
 
+        # Free GPU & RAM cache between epochs
+        torch.cuda.empty_cache()
+        gc.collect()
+
         # Validate
-        val_loss = evaluate(model, val_loader, device, tok)
-        val_ppl = math.exp(min(10.0, val_loss))
+        val_loss, val_acc = evaluate(model, val_loader, device, tok)
+        torch.cuda.empty_cache()
+        gc.collect()
         epoch_time = time.time() - epoch_start
 
         print(
             f"\n>>> Epoch {epoch:02d} Complete ({epoch_time:.1f}s) | "
             f"Train Loss: {epoch_train_loss:.4f} | "
             f"Val Loss: {val_loss:.4f} | "
-            f"Val Perplexity: {val_ppl:.2f}"
+            f"Validation Visual Acc: {val_acc:.2f}%"
         )
 
-        if val_loss < best_val_loss:
+        if val_acc > best_val_acc or (val_acc == best_val_acc and val_loss < best_val_loss):
+            best_val_acc = val_acc
             best_val_loss = val_loss
             torch.save(
                 {
@@ -175,6 +203,7 @@ def train():
                     "model_state_dict": model.state_dict(),
                     "optimizer_state_dict": optimizer.state_dict(),
                     "val_loss": val_loss,
+                    "val_acc": val_acc,
                     "vocab_size": tok.vocab_size,
                     "d_model": 256,
                     "params": model.get_parameter_count(),
@@ -182,14 +211,14 @@ def train():
                 },
                 ckpt_path,
             )
-            print(f"⭐ Saved new best checkpoint -> {ckpt_path} (Val Loss: {val_loss:.4f})")
+            print(f"⭐ Saved new best checkpoint -> {ckpt_path} (Acc: {val_acc:.2f}%, Val Loss: {val_loss:.4f})")
 
         run_sample_generation(model, val_loader.dataset, device, tok)
 
     total_time = time.time() - total_start
     print(f"\n=======================================================")
     print(f"  🎉 TRAINING COMPLETE in {total_time/60:.2f} minutes!")
-    print(f"  🏆 Best Validation Loss: {best_val_loss:.4f}")
+    print(f"  🏆 Best Validation Visual Accuracy: {best_val_acc:.2f}%")
     print(f"  💾 Saved Model: checkpoints/medvision_best.pt")
     print(f"=======================================================\n")
 

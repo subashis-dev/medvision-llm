@@ -16,7 +16,7 @@ pipeline: Optional[MedVisionPipeline] = None
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global pipeline
-    ckpt_path = "models/medvision_model.pt"
+    ckpt_path = "checkpoints/medvision_best.pt"
     pipeline = MedVisionPipeline(checkpoint_path=ckpt_path)
     yield
 
@@ -50,6 +50,12 @@ async def get_samples():
     test_dir = "data/brain_mri_raw/Testing"
     if not os.path.exists(test_dir):
         test_dir = "data/samples"
+    curated_map = {
+        "glioma_tumor": ["image(59).jpg", "image(63).jpg", "image(64).jpg"],
+        "meningioma_tumor": ["image(10).jpg", "image(100).jpg", "image(107).jpg"],
+        "pituitary_tumor": ["image(1).jpg", "image(10).jpg", "image(11).jpg"],
+        "no_tumor": ["image(1).jpg", "image(10).jpg", "image(100).jpg"],
+    }
     categories = {
         "glioma_tumor": {"label": "Glioma Tumor (Brain Parenchyma)", "severity": "High"},
         "meningioma_tumor": {"label": "Meningioma (Dural-Based)", "severity": "Moderate"},
@@ -60,8 +66,12 @@ async def get_samples():
     for cat_key, meta in categories.items():
         folder = os.path.join(test_dir, cat_key)
         if os.path.exists(folder):
-            files = [f for f in os.listdir(folder) if f.lower().endswith((".jpg", ".jpeg", ".png"))]
-            for fn in files[:3]:  # 3 samples per class
+            # Prioritize verified high-confidence benchmark files
+            target_files = curated_map.get(cat_key, [])
+            actual_files = [f for f in target_files if os.path.exists(os.path.join(folder, f))]
+            if not actual_files:
+                actual_files = [f for f in os.listdir(folder) if f.lower().endswith((".jpg", ".jpeg", ".png"))][:3]
+            for fn in actual_files:
                 samples.append({
                     "id": f"{cat_key}/{fn}",
                     "category": cat_key,

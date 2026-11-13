@@ -8,6 +8,13 @@ from torch.utils.data import Dataset, DataLoader
 from tokenizer import MedicalTokenizer
 
 # 12 Diverse Clinical Question & Diagnostic Task Prompts
+CAT2LABEL = {
+    "glioma_tumor": 0,
+    "meningioma_tumor": 1,
+    "pituitary_tumor": 2,
+    "no_tumor": 3,
+}
+
 PROMPT_TEMPLATES = [
     "Scan: Brain MRI | Task: Analyze clinical case and diagnose",
     "Scan: Brain MRI | Query: What pathology is visible in this scan?",
@@ -282,13 +289,16 @@ class BrainMRIVLMDataset(Dataset):
     def __getitem__(self, idx: int) -> Dict[str, torch.Tensor]:
         img_path, category = self.samples[idx]
 
-        # 1. Load & Preprocess MRI Image
-        img = cv2.imread(img_path)
-        if img is None:
+        # 1. Load & Preprocess MRI Image with Out-of-Memory Safeguard
+        try:
+            img = cv2.imread(img_path)
+            if img is None:
+                img = np.zeros((self.img_size, self.img_size, 3), dtype=np.uint8)
+            else:
+                img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+                img = cv2.resize(img, (self.img_size, self.img_size), interpolation=cv2.INTER_AREA)
+        except Exception:
             img = np.zeros((self.img_size, self.img_size, 3), dtype=np.uint8)
-        else:
-            img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-            img = cv2.resize(img, (self.img_size, self.img_size), interpolation=cv2.INTER_AREA)
 
         # 2. Apply Dynamic Medical Augmentation on Training Split
         if self.augment:
@@ -305,18 +315,18 @@ class BrainMRIVLMDataset(Dataset):
         case_item = random.choice(DIAGNOSTIC_CASES[category])
 
         response_dict = {
-            "modality": "brain mri",
-            "finding": case_item["finding"],
             "diagnosis": case_item["diagnosis"],
             "severity": case_item["severity"],
+            "finding": case_item["finding"],
+            "modality": "brain mri",
             "clinical_case": case_item["case"],
             "recommendations": case_item["rec"],
         }
         response_json = (
-            f'{{"modality":"{response_dict["modality"]}",'
-            f'"finding":"{response_dict["finding"]}",'
-            f'"diagnosis":"{response_dict["diagnosis"]}",'
+            f'{{"diagnosis":"{response_dict["diagnosis"]}",'
             f'"severity":"{response_dict["severity"]}",'
+            f'"finding":"{response_dict["finding"]}",'
+            f'"modality":"{response_dict["modality"]}",'
             f'"clinical_case":"{response_dict["clinical_case"]}",'
             f'"recommendations":"{response_dict["recommendations"]}"}}'
         )
@@ -345,12 +355,14 @@ class BrainMRIVLMDataset(Dataset):
             targets = targets + [self.tokenizer.pad_token_id] * pad_len
             loss_mask = loss_mask + [0.0] * pad_len
 
+        cat_idx = CAT2LABEL.get(category, 0)
         return {
             "images": img_tensor,
             "input_ids": torch.tensor(input_ids, dtype=torch.long),
             "targets": torch.tensor(targets, dtype=torch.long),
             "loss_mask": torch.tensor(loss_mask, dtype=torch.float),
             "category": category,
+            "labels": torch.tensor(cat_idx, dtype=torch.long),
         }
 
 
@@ -359,7 +371,7 @@ def get_dataloaders(
     img_size: int = 128,
     max_seq_len: int = 160,
 ) -> Tuple[DataLoader, DataLoader, MedicalTokenizer]:
-    tok = MedicalTokenizer("models/vocab.json")
+    tok = MedicalTokenizer("data/vocab.json")
     train_ds = BrainMRIVLMDataset(split="Training", tokenizer=tok, img_size=img_size, max_seq_len=max_seq_len, augment=True)
     val_ds = BrainMRIVLMDataset(split="Testing", tokenizer=tok, img_size=img_size, max_seq_len=max_seq_len, augment=False)
 

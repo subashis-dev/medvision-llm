@@ -161,8 +161,13 @@ class MedVisionVLM(nn.Module):
         self.max_seq_len = max_seq_len
         self.num_vis_tokens = num_vis_tokens
 
-        # 1. Vision Feature Extractor
+        # 1. Vision Feature Extractor & Auxiliary Classifier
         self.vision_encoder = ConvNeXtVisionEncoder(in_channels=3, out_dim=d_model, num_tokens=num_vis_tokens)
+        self.vis_classifier = nn.Sequential(
+            nn.Linear(d_model, d_model // 2),
+            nn.GELU(),
+            nn.Linear(d_model // 2, 4),
+        )
 
         # 2. Text Token & Positional Embeddings
         self.tok_embeddings = nn.Embedding(vocab_size, d_model)
@@ -199,15 +204,21 @@ class MedVisionVLM(nn.Module):
         input_ids: torch.Tensor,
         targets: Optional[torch.Tensor] = None,
         loss_mask: Optional[torch.Tensor] = None,
-    ) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
+        labels: Optional[torch.Tensor] = None,
+    ) -> Tuple[torch.Tensor, torch.Tensor, Optional[torch.Tensor]]:
         """
         images: [B, 3, 128, 128]
         input_ids: [B, T] (Text prompt + target tokens)
         targets: Optional [B, T]
         loss_mask: Optional [B, T] (1.0 on target tokens, 0.0 on prompt/pad)
+        labels: Optional [B] (0..3 ground truth pathology class)
         """
         B, T = input_ids.shape
         vis_tokens = self.vision_encoder(images)  # [B, 16, d_model]
+
+        # Auxiliary direct visual classification logits
+        vis_pooled = vis_tokens.mean(dim=1)
+        cls_logits = self.vis_classifier(vis_pooled)  # [B, 4]
 
         # Text embeddings + positional embeddings
         text_embeds = self.tok_embeddings(input_ids)  # [B, T, d_model]
@@ -228,33 +239,38 @@ class MedVisionVLM(nn.Module):
 
         loss = None
         if targets is not None:
-            # Shift for autoregressive causal prediction:
-            # logits at position t predict targets at position t
             shift_logits = logits.contiguous().view(-1, self.vocab_size)
             shift_targets = targets.contiguous().view(-1)
             
             if loss_mask is not None:
                 ce_loss = F.cross_entropy(shift_logits, shift_targets, reduction='none')
                 flat_mask = loss_mask.contiguous().view(-1)
-                loss = (ce_loss * flat_mask).sum() / (flat_mask.sum() + 1e-8)
+                lm_loss = (ce_loss * flat_mask).sum() / (flat_mask.sum() + 1e-8)
             else:
-                loss = F.cross_entropy(shift_logits, shift_targets, ignore_index=0)
+                lm_loss = F.cross_entropy(shift_logits, shift_targets, ignore_index=0)
 
-        return logits, loss
+            if labels is not None:
+                vis_loss = F.cross_entropy(cls_logits, labels)
+                loss = lm_loss + 1.0 * vis_loss
+            else:
+                loss = lm_loss
+
+        return logits, cls_logits, loss
 
     @torch.no_grad()
     def generate(
         self,
         image: torch.Tensor,
         prompt_ids: torch.Tensor,
-        max_new_tokens: int = 120,
-        temperature: float = 0.6,
+        max_new_tokens: int = 140,
+        temperature: float = 0.3,
         eos_token_id: int = 2,
-    ) -> torch.Tensor:
-        """Autoregressively generates clinical medical findings conditioned on the visual scan."""
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        """Autoregressively generates clinical findings conditioned on the visual scan."""
         self.eval()
         B = image.shape[0]
         vis_tokens = self.vision_encoder(image)  # [B, 16, d_model]
+        cls_logits = self.vis_classifier(vis_tokens.mean(dim=1))  # [B, 4]
 
         curr_ids = prompt_ids.clone()  # [B, T]
 
@@ -277,7 +293,7 @@ class MedVisionVLM(nn.Module):
             if (next_token == eos_token_id).all():
                 break
 
-        return curr_ids
+        return curr_ids, cls_logits
 
 
 if __name__ == "__main__":

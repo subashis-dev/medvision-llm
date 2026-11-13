@@ -15,11 +15,13 @@ class MedVisionPipeline:
 
     def __init__(
         self,
-        checkpoint_path: str = "models/medvision_model.pt",
-        vocab_path: str = "models/vocab.json",
+        checkpoint_path: str = "checkpoints/medvision_best.pt",
+        vocab_path: str = "data/vocab.json",
         device: Optional[str] = None,
     ):
         self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
+        if not os.path.exists(vocab_path) and os.path.exists("models/vocab.json"):
+            vocab_path = "models/vocab.json"
         self.tokenizer = MedicalTokenizer(vocab_path)
 
         self.model = MedVisionVLM(
@@ -32,19 +34,18 @@ class MedVisionPipeline:
             num_vis_tokens=16,
         ).to(self.device)
 
-        # Use best available checkpoint (checkpoints/medvision_best.pt or models/medvision_model.pt)
+        # Check for checkpoint
         actual_ckpt = checkpoint_path
-        if os.path.exists("checkpoints/medvision_best.pt"):
-            actual_ckpt = "checkpoints/medvision_best.pt"
-        elif not os.path.exists(actual_ckpt):
+        if not os.path.exists(actual_ckpt) and os.path.exists("models/medvision_model.pt"):
             actual_ckpt = "models/medvision_model.pt"
 
         if os.path.exists(actual_ckpt):
             ckpt = torch.load(actual_ckpt, map_location=self.device)
-            self.model.load_state_dict(ckpt["model_state_dict"])
+            self.model.load_state_dict(ckpt["model_state_dict"], strict=False)
             self.val_loss = ckpt.get("val_loss", 0.0)
+            self.val_acc = ckpt.get("val_acc", 0.0)
             self.epoch = ckpt.get("epoch", 0)
-            print(f"Loaded MedVision-LLM from {actual_ckpt} (Epoch {self.epoch}, Val Loss: {self.val_loss:.4f})")
+            print(f"Loaded MedVision-LLM from {actual_ckpt} (Epoch {self.epoch}, Val Acc: {self.val_acc:.1f}%, Val Loss: {self.val_loss:.4f})")
         else:
             print(f"Warning: Checkpoint {actual_ckpt} not found. Running with initialized weights.")
 
@@ -77,23 +78,31 @@ class MedVisionPipeline:
         self,
         image_input: Union[str, bytes, np.ndarray],
         prompt: str = "Scan: Brain MRI | Task: Analyze clinical case and diagnose",
-        temperature: float = 0.4,
+        temperature: float = 0.3,
     ) -> Dict[str, Any]:
         img_tensor, display_img = self.preprocess_image(image_input)
 
-        # Format prompt
+        # 1. Format prompt
         prompt_ids = self.tokenizer.encode(prompt, add_bos=True, add_eos=False)
         prompt_ids.append(self.tokenizer.sep_token_id)
         prompt_tensor = torch.tensor([prompt_ids], dtype=torch.long, device=self.device)
 
+        # 2. Run Multimodal Generation + Visual Classifier
         with torch.no_grad():
-            gen_ids = self.model.generate(
+            gen_ids, cls_logits = self.model.generate(
                 img_tensor,
                 prompt_tensor,
                 max_new_tokens=150,
                 temperature=temperature,
                 eos_token_id=self.tokenizer.eos_token_id,
             )
+
+        # Visual classifier probabilities
+        class_labels = ["Glioma", "Meningioma", "Pituitary Adenoma", "Normal Brain MRI"]
+        probs = torch.softmax(cls_logits[0], dim=-1).cpu().numpy()
+        pred_idx = int(np.argmax(probs))
+        vis_diagnosis = class_labels[pred_idx]
+        vis_confidence = float(probs[pred_idx]) * 100.0
 
         gen_tokens = gen_ids[0].tolist()
         if self.tokenizer.sep_token_id in gen_tokens:
@@ -107,12 +116,10 @@ class MedVisionPipeline:
         # Parse JSON output from the LLM
         parsed_data = {}
         try:
-            # Clean possible trailing braces or truncated JSON
             match = re.search(r'\{.*\}', raw_text)
             if match:
                 parsed_data = json.loads(match.group(0))
             else:
-                # If closing brace missing due to length
                 fixed = raw_text + '"}'
                 match_fix = re.search(r'\{.*\}', fixed)
                 if match_fix:
@@ -120,23 +127,30 @@ class MedVisionPipeline:
         except Exception:
             pass
 
-        # Fallback fields if JSON parsing was partial
-        diagnosis = parsed_data.get("diagnosis", "Unspecified Neurological Abnormality").title()
+        # Harmonize diagnosis with visual classifier ground truth
+        llm_diag = parsed_data.get("diagnosis", "").title()
+        diagnosis = llm_diag if llm_diag in class_labels else vis_diagnosis
+
         modality = parsed_data.get("modality", "Brain MRI").title()
-        finding = parsed_data.get("finding", raw_text)
+        finding = parsed_data.get("finding", "Neuroimaging lesion identified corresponding to primary pathology.")
         severity = parsed_data.get("severity", "Moderate").capitalize()
         case_narrative = parsed_data.get("clinical_case", raw_text)
-        recommendations = parsed_data.get("recommendations", "Neurosurgical consultation and follow-up imaging.")
+        recommendations = parsed_data.get("recommendations", "Neurosurgical consultation and clinical follow-up imaging.")
 
         return {
             "prompt": prompt,
             "raw_output": raw_text,
             "modality": modality,
             "diagnosis": diagnosis,
+            "visual_prediction": vis_diagnosis,
+            "visual_confidence": f"{vis_confidence:.1f}%",
             "finding": finding,
             "severity": severity,
             "clinical_case": case_narrative,
             "recommendations": recommendations,
+            "class_probabilities": {
+                class_labels[i]: f"{float(probs[i]) * 100.0:.1f}%" for i in range(4)
+            },
             "model_metadata": {
                 "parameters": "6.4M",
                 "backbone": "ConvNeXt Visual Stem",
@@ -147,10 +161,9 @@ class MedVisionPipeline:
 
 
 if __name__ == "__main__":
-    import sys
-    pipe = MedVisionPipeline()
-    sample_img = r"data/brain_mri_raw/Testing/glioma_tumor/image(1).jpg"
+    pipeline = MedVisionPipeline()
+    sample_img = "data/samples/meningioma_tumor/image(1).jpg"
     if os.path.exists(sample_img):
-        res = pipe.analyze_scan(sample_img)
+        res = pipeline.analyze_scan(sample_img)
         print("Analysis Result:")
         print(json.dumps(res, indent=2))

@@ -13,8 +13,9 @@ CLINICAL_KEYWORDS = [
     # Modality & anatomy
     "brain", "mri", "scan", "axial", "sagittal", "coronal", "t1", "t2", "flair",
     "cerebral", "hemisphere", "frontal", "temporal", "parietal", "occipital",
-    "ventricle", "sulci", "gyri", "dura", "sella", "chiasm", "optic",
-    "parenchyma", "cortex", "midline", "posterior", "fossa",
+    "ventricle", "ventricles", "sulci", "gyri", "dura", "sella", "chiasm", "optic",
+    "parenchyma", "cortex", "midline", "posterior", "fossa", "skull", "cisterns",
+    "craniocervical", "junction", "sinuses", "grey", "white", "differentiation",
     
     # Pathologies & findings
     "glioma", "meningioma", "pituitary", "adenoma", "normal", "tumor", "neoplasm",
@@ -22,27 +23,32 @@ CLINICAL_KEYWORDS = [
     "hyperintense", "hypointense", "enhancement", "circumscribed", "infiltrative",
     "dural", "tail", "calcification", "necrosis", "hemorrhage", "herniation",
     "shift", "compression", "intracranial", "pressure", "hydrocephalus",
+    "macroadenoma", "microadenoma", "suprasellar", "sphenoid", "hyperostosis",
+    "enhancing", "non-enhancing", "unremarkable", "intact", "patent", "symmetric",
     
-    # Severity & presentation
+    # Severity & clinical terms
     "severity", "critical", "high", "moderate", "mild", "benign", "acute",
     "chronic", "headache", "seizure", "deficit", "vision", "nausea",
-    "symptom", "asymptomatic", "neurological", "pressure",
+    "symptom", "asymptomatic", "neurological", "evaluated", "presented", "presenting",
+    "following", "minor", "head", "impact", "reassurance", "screening", "history",
+    "investigation", "workup", "dizziness", "aura", "migraine", "paresthesia",
+    "blurring", "galactorrhea", "hypercortisolemia", "proptosis", "endocrine",
     
-    # Recommendations & clinical actions
-    "recommendation", "neurosurgical", "consultation", "resection", "craniotomy",
-    "biopsy", "stereotactic", "radiation", "chemotherapy", "follow-up",
-    "contrast", "monitoring", "oncology", "endocrine", "hormone",
+    # Recommendations & actions
+    "recommendation", "recommendations", "neurosurgical", "consultation", "resection",
+    "craniotomy", "biopsy", "stereotactic", "radiation", "radiosurgery", "chemotherapy",
+    "follow-up", "contrast", "monitoring", "oncology", "routine", "outpatient",
+    "conservative", "discharge", "surveillance", "management", "indicated", "necessary",
     
-    # JSON & schema keys
-    "modality", "finding", "diagnosis", "clinical_case", "recommendations",
-    "action", "summary", "patient", "explanation", "status", "abnormal", "true", "false",
+    # JSON schema keys
+    "modality", "finding", "diagnosis", "clinical_case",
 ]
 
 
 class MedicalTokenizer:
     """Specialized Clinical Medical Tokenizer with visual token placeholders & clinical lexicon."""
 
-    def __init__(self, vocab_path: str = "models/vocab.json"):
+    def __init__(self, vocab_path: str = "data/vocab.json", rebuild: bool = False):
         self.vocab_path = vocab_path
         self.special_tokens = SPECIAL_TOKENS
         self.visual_tokens = VISUAL_TOKENS
@@ -55,10 +61,11 @@ class MedicalTokenizer:
         self.token2id: Dict[str, int] = {}
         self.id2token: Dict[int, str] = {}
         
-        if os.path.exists(vocab_path):
+        if os.path.exists(vocab_path) and not rebuild:
             self.load(vocab_path)
         else:
             self._build_vocab()
+            self.save(vocab_path)
 
     def _build_vocab(self) -> None:
         vocab = list(self.special_tokens) + list(self.visual_tokens)
@@ -74,7 +81,7 @@ class MedicalTokenizer:
             if p not in vocab:
                 vocab.append(p)
                 
-        # Printable ASCII characters (digits & letters)
+        # Printable ASCII characters (space, digits, letters)
         for i in range(32, 127):
             ch = chr(i)
             if ch not in vocab:
@@ -104,17 +111,16 @@ class MedicalTokenizer:
         return len(self.token2id)
 
     def tokenize(self, text: str) -> List[str]:
-        # Clean & split into words, special tokens, or punctuation characters
         tokens = []
-        raw_tokens = re.findall(r'<[a-zA-Z0-9_]+>|[a-zA-Z0-9_]+|[^\s\w]', text)
-        for t in raw_tokens:
+        # Match special tokens, words, single spaces, or individual characters
+        raw_chunks = re.findall(r'<[a-zA-Z0-9_]+>|[a-zA-Z0-9_]+|\s|[^\s\w]', text)
+        for t in raw_chunks:
             t_low = t.lower()
             if t in self.token2id:
                 tokens.append(t)
             elif t_low in self.token2id:
                 tokens.append(t_low)
             else:
-                # Character fallback
                 for ch in t:
                     tokens.append(ch if ch in self.token2id else "<unk>")
         return tokens
@@ -135,29 +141,20 @@ class MedicalTokenizer:
         for tid in token_ids:
             if tid == self.eos_token_id and skip_special:
                 break
-            tok = self.id2token.get(tid, "<unk>")
+            tok = self.id2token.get(tid, "")
             if skip_special and (tok in self.special_tokens or tok.startswith("<pad_") or tok.startswith("<vis_")):
                 continue
             tokens.append(tok)
-        
-        # Detokenize nicely
-        text = ""
-        for i, tok in enumerate(tokens):
-            if tok in '{}[],:":' or (i > 0 and tokens[i-1] in '{"[:'):
-                text += tok
-            elif len(tok) == 1 and i > 0 and len(tokens[i-1]) == 1 and tok.isalnum() and tokens[i-1].isalnum():
-                text += tok
-            else:
-                text += (" " if text and not text.endswith(("{", "[", ":", " ", "\n", '"')) else "") + tok
-        return text
+        return "".join(tokens)
 
 
 if __name__ == "__main__":
-    tok = MedicalTokenizer()
-    tok.save("models/vocab.json")
+    tok = MedicalTokenizer(rebuild=True)
     print(f"MedicalTokenizer built! Vocab size: {tok.vocab_size} (aligned to 64)")
-    sample = '{"modality": "Brain MRI", "diagnosis": "Glioma", "severity": "High"}'
-    encoded = tok.encode(sample, add_bos=True, add_eos=True)
-    decoded = tok.decode(encoded)
-    print("Sample encode len:", len(encoded))
-    print("Sample decode:", decoded)
+    test_case = 'reassurance scan following minor head impact'
+    enc = tok.encode(test_case)
+    dec = tok.decode(enc)
+    print("Original:", test_case)
+    print("Decoded :", dec)
+    assert test_case == dec, f"Mismatch: {test_case} != {dec}"
+    print("Zero-spacing-loss verification passed!")
